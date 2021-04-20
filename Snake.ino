@@ -1,52 +1,40 @@
+/*
+ * The classic game snake
+ * author: Vera Link
+ * hardware: Arduino nano, 8x8 LED display, 5 LEDs + shift register, 4 push buttons
+ */
 #include <LedControl.h>
-//#include <ArrayField.h>
 #include <time.h>
-#define DIM 10
 #define UP 0
 #define DOWN 2
 #define RIGHT 1
 #define LEFT 3
 
-// LedControl(int dataPin, int clkPin, int csPin, int numDevices=1);
+// parameters: int dataPin, int clkPin, int csPin, int numDevices
 LedControl lc = LedControl (12, 11, 10, 1);
-// input and output definitions
+
+// pins for the buttons commanding the direction
 int buttonUp = 6;
 int buttonRight = 7;
 int buttonDown = 8;
 int buttonLeft = 9;
-int latchPin = 4; // before: 8 (orange)
-int clockPin = 2; // before: 12 (yellow)
-int dataPin = 3; // before 11 (grey)
-
-// constants for the field contents
-const int WALL = -1;        // walls of the field
-const int TREAT = 9;        // treat the snake wants to eat
-const int HEAD = 1;
+// pins for the shift register for the 5 level LEDs
+int latchPin = 4;   // orange
+int clockPin = 2;   // yellow
+int dataPin = 3;    // grey
 
 // several static variables:
-static int lives = 1;
-static int speedTime = 700;
-static int score = 0;
-static int currentLevel = 0;
-static int direction;       // direction in which the snake moves (0 = up, 1 = right, 2 = down, 3 = left)
-static int treatPosX;
-static int treatPosY;       
-static int headPosX;      // column
-static int headPosY;      // row
-
-static int field[DIM][DIM]= { {WALL,WALL,WALL,WALL,WALL,WALL,WALL,WALL,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,0,0,0,0,0,0,0,0,WALL},
-                              {WALL,WALL,WALL,WALL,WALL,WALL,WALL,WALL,WALL}};
+static int speedTime[5] = {700, 550, 400, 300, 230}; // the higher the int, the faster the snake moves
+static int currentLevel;  // eg. used to iterate through the speedTime-Array
+static int score;         // increased after each eaten treat, after certain scores currentLevel increases
+static int direction;     // direction in which the snake moves (see defined constants)
+static int treatPos;      // treat the snake wants to eats, first digit = x-position, second digit = y-position
+static int snakeBody[64]; // snakeBody[0] represents the head, first digit = x-position, second digit = y-position
+static int snakeLength;   // eg. used to iterate through the snakeBody-Array
 
 
-void setup() {
+void setup() 
+{
   lc.shutdown(0, false);      // false -> normal operation, true -> power-down-mode
   lc.setIntensity(0,15);      // brightness from 1 - 15
   lc.clearDisplay(0);
@@ -62,49 +50,43 @@ void setup() {
   pinMode(dataPin, OUTPUT);
 
   lightTest(); 
-  displayCountDown();
-  
-  digitalWrite(latchPin, LOW);
-  shiftOut(dataPin, clockPin, MSBFIRST, 0B00000001);
-  digitalWrite(latchPin, HIGH);
-
 }
 
 void loop()
 {
-  lives = 1;
+  gameReset();
+  displayCountDown();
+  bool alive = true;
   setSnake();
   setTreat();
   displayMatrix();
-  while (lives == 1)
+  while (alive)
   {
     direction = directionInput();
-    slither();
+    alive = nextMove();
     displayMatrix();
-  }
+  }  
 }
-
-// sets LEDs on Matrix on/off according to current state of the field. 
+    
+/* sets LEDs on Matrix on/off according to current positions of the snake and the treat */
 void displayMatrix () {
   lc.clearDisplay(0);
-  for (int i = 0; i < 8; i++)
+  // display the treat:
+  lc.setLed(0, treatPos % 10, treatPos / 10, true);
+  // display the snakes body:
+  for (int i = 0; i < snakeLength; i++)
   {
-     for (int j = 0; j < 8; j++)
-     {
-       if(field[i+1][j+1] == 0)
-       {
-          continue;
-       }
-       lc.setLed(0,i,j,true);
-     }
+    lc.setLed(0, snakeBody[i] % 10, snakeBody[i] / 10, true);
   }
 }
 
-// listens to the push buttons for orders to change the direction
+/* Listens to the 4 push buttons for commands to change the direction 
+ * the higher the currentLevel, the more time the player has for his/her move
+*/
 int directionInput()
 {
   int input = direction;
-  int waitingTime = speedTime;
+  int waitingTime = speedTime[currentLevel];
   while (waitingTime > 0)
   {
     if (digitalRead(buttonUp) == HIGH) input = UP;
@@ -118,128 +100,142 @@ int directionInput()
   return input;
 }
 
-void slither()
+/* Moving the snake according to the current direction. 
+   Returns true if move is successfull, and false if the snake hits its head 
+   */
+bool nextMove()
 {
-  // save the new position temporarily:
-  int newHeadPosX = headPosX;
-  int newHeadPosY = headPosY;
-  // updates the new position according to the current chosen direction:
+  int newHeadPos = -1;
   switch (direction)
   {
-    case UP: 
-      newHeadPosY--;
+     case UP:
+      newHeadPos = snakeBody[0] - 1;
       break;
-    case RIGHT: 
-      newHeadPosX++;
+     case RIGHT:
+      newHeadPos = snakeBody[0] + 10;
       break;
-    case DOWN:
-      newHeadPosY++;
+     case DOWN:
+      newHeadPos = snakeBody[0] + 1;
       break;
-    case LEFT:
-      newHeadPosX--;
+     case LEFT:
+      newHeadPos = snakeBody[0] - 10;
       break;
   }
-  switch (field[newHeadPosY][newHeadPosX])
+  // check if snake hits itself (condition 1) or the wall (conditions 1-3):
+  if (isSnake(newHeadPos) || newHeadPos < 0 || newHeadPos > 77 || newHeadPos % 10 > 7) 
   {
-    case WALL:  // snake hit the wall. The loop lets the snakes head blink to symbolize the injury
-      for (int i = 0; i < 10; i ++)
-      {
-        lc.setLed(0,headPosY-1,headPosX-1,false);
-        delay(100);
-        lc.setLed(0,headPosY-1,headPosX-1,true);
-        delay(100);
-      }
-      lives--;
-      speedTime = 700;
-      score = 0;
-      currentLevel = 0;
-      lightTest(); 
-      break;
-    case 0:     // snake has free place to move in the current direction. The heads position gets updated
-      field[headPosY][headPosX] = 0;
-      headPosY = newHeadPosY;
-      headPosX = newHeadPosX;
-      field[headPosY][headPosX] = HEAD;
-      break; 
-    case TREAT:   // snake eats the treat. FOR NOW: end game so that a new snake/treat is created
-      score++;
-      levelUp();
-      lives--;
-      break;
-    default:
-      break;
+    // let the hurt head blink a few times
+    letBlink(snakeBody[0], 10);
+    return false;
   }
+  // check if the snake eats a treat
+  if (newHeadPos == treatPos)
+  {
+    score++;
+    setTreat();
+    snakeLength++;
+    // level up after a certain reached score
+    if (score == 3 || score == 7 || score == 12 || score == 17) 
+    {
+      levelUp();
+    }
+  }
+  // update the position of the snakes body parts by iterating through the snakeBody-Array from behind (shifting)
+  for (int i = snakeLength - 1; i > 0; i--)
+  {
+    snakeBody[i] = snakeBody[i - 1];
+  }
+  snakeBody[0] = newHeadPos;
+  return true;
 }
 
+/* Creates a new snake in the down right corner. */
 void setSnake()
 {
-  field[headPosY][headPosX] = 0;
-  direction = random(0,4);
-  do 
+  direction = LEFT;
+  snakeLength = 3;
+  // delete old body parts:
+  for (int i = 3; i < 64; i++)
   {
-    headPosY = random(3,7);  // row
-    headPosX = random(3,7);  // column
-  } while (field[headPosY][headPosX] != 0);
-  field[headPosY][headPosX] = HEAD;
+    snakeBody[i] = 0;
+  }
+  // set new body parts:
+  snakeBody[0] = 46;
+  snakeBody[1] = 56;
+  snakeBody[2] = 66;
 }
 
+/* Creates a new treat at a random free place */
 void setTreat()
 {
-  field[treatPosY][treatPosX] = 0;
   do 
   {
-    treatPosY = random(1,9);  // row
-    treatPosX = random(1,9);  // column
-  } while (field[treatPosY][treatPosX] != 0);
-  field[treatPosY][treatPosX] = TREAT;
+    treatPos = random(0,8) * 10 + random(0,8);
+  } while (isSnake(treatPos));
 }
 
-// always level up after 3 eaten treats.
+/* checks if the given position is already covered by the snake*/
+bool isSnake(int pos)
+{
+  for (int i = 0; i < snakeLength; i++)
+  {
+    if (snakeBody[i] == pos) return true;
+  }
+  return false;
+}
+
+/* Level up after a certain reached score (=eaten treats). Do so by:
+ * Increasing currentLevel (automatically makes the snake moves faster)
+ * lighten up one more LED on the hardware controller (via shift register)
+*/
 void levelUp()
 {
+  currentLevel++;
   Serial.print("score: "); Serial.println(score);
-  if ((score % 3) == 0) 
-  {
-    currentLevel++;
-    Serial.print("level: "); Serial.println(currentLevel);
-    int levels[5] = {0B00000001, 0B00000011, 0B00000111, 0B00001111, 0B00011111}; 
-    digitalWrite(latchPin, LOW);
-    shiftOut(dataPin, clockPin, MSBFIRST, levels[currentLevel]);
-    digitalWrite(latchPin, HIGH);
-    speedTime = speedTime - 150;
-  }
+  Serial.print("level: "); Serial.println(currentLevel);
+  int levelLEDs[5] = {0B00000001, 0B00000011, 0B00000111, 0B00001111, 0B00011111}; 
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clockPin, MSBFIRST, levelLEDs[currentLevel]);
+  digitalWrite(latchPin, HIGH);
 }
 
+/* resets scores and turns on first level LED */
+void gameReset()
+{
+  currentLevel = 0;
+  score = 0;
+  digitalWrite(latchPin, LOW);
+  shiftOut(dataPin, clockPin, MSBFIRST, 0B00000001);
+  digitalWrite(latchPin, HIGH);
+}
 
+/* to be called at each new game for player prep*/
 void displayCountDown()
 {
   byte no3[8] = {0B00000000,0B00111100,0B01100110,0B00000110,0B00011100,0B00000110,0B01100110,0B00111100};
   byte no2[8] = {0B00000000,0B00111100,0B01100110,0B00000110,0B00011100,0b00110000,0B01100110,0B01111110};
   byte no1[8] = {0B00000000,0B00011000,0B00111000,0B00011000,0B00011000,0B00011000,0B00011000,0B01111110};
   byte go[8]  = {0B00000000,0B01110111,0B10000101,0B10110101,0B10010101,0B01110111,0B00000000,0B00000000};
-  
-  setMatrix(no3, 0);
+  setMatrix(no3);
   delay(1000);
-  setMatrix(no2, 0);
+  setMatrix(no2);
   delay(1000);
-  setMatrix(no1, 0);
+  setMatrix(no1);
   delay(1000);
-  setMatrix(go, 0);
+  setMatrix(go);
   delay(1000);
-
 }
 
-// m[8] = array to be printed
-// byte mode = 1 inverts the colors
-void setMatrix(byte m[8], byte mode) {
-  int x;
-  if (mode == 1) x = 0B11111111;
-  if (mode == 0) x = 0B00000000;
-  for (int i = 0; i < 8; i++) {
-    lc.setRow(0, i, m[i] ^ x);
+/* prints an array of length 8 on the 8x8 LED Matrix */
+void setMatrix(byte m[8]) 
+{
+  for (int i = 0; i < 8; i++) 
+  {
+    lc.setRow(0, i, m[i]);
   }
 }
 
+/* Enlights LED 1 - 5 */
 void lightTest()
 {
   int tests[6] = {0B00000001, 0B00000011, 0B00000111, 0B00001111, 0B00011111,0B00000000}; 
@@ -249,21 +245,16 @@ void lightTest()
     digitalWrite(latchPin, HIGH);
     delay(150);
   }
-  
 }
-/*
 
-void decreaseLive()
+/* lets a certain LED of the matrix at position pos blink for n times*/
+void letBlink(int pos, int n)
 {
-  int currentLed;
-  switch (lives)
+  for (int i = 0; i < n; i++)
   {
-    case 3: currentLed = led3; break;
-    case 2: currentLed = led2; break;
-    case 1: currentLed = led1; break;
+    lc.setLed(0, pos % 10, pos / 10, false);
+    delay(80);
+    lc.setLed(0, pos % 10, pos / 10, true);
+    delay(80);
   }
-  pinMode(currentLed, LOW);
-  lives--;
 }
-
- */
